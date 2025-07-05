@@ -118,6 +118,10 @@ def bench_deepgemm(
     torch.cuda.synchronize()
     avg = start_event.elapsed_time(end_event) / num_run * 1000  # us
 
+    torch.cuda.nvtx.range_push('deepgemm')
+    run_deepgemm()
+    torch.cuda.nvtx.range_pop()
+
     return avg, m
 
 
@@ -227,6 +231,7 @@ def bench_cutlass(
         run_cutlass()
     torch.cuda.synchronize()
 
+    torch.cuda.cudart().cudaProfilerStart()
     # run
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True)
@@ -237,6 +242,11 @@ def bench_cutlass(
     end_event.synchronize()
     torch.cuda.synchronize()
     avg = start_event.elapsed_time(end_event) / num_run * 1000  # us
+    torch.cuda.cudart().cudaProfilerStop()
+
+    torch.cuda.nvtx.range_push('cutlass')
+    run_cutlass()
+    torch.cuda.nvtx.range_pop()
 
     return avg, expert_offsets[-1]
 
@@ -293,34 +303,10 @@ def main():
     parser.add_argument("--num-warmup", type=int, default=3)
     parser.add_argument("--num-run", type=int, default=10)
     shape_args = [
-        # Prefill, DeepSeek-R1, gateup, chunk_size = 4096, TP = 8
-        ShapeArg(expected_m_per_group=128, n=512, k=7168, num_groups=256),
-        # Prefill, DeepSeek-R1, gateup, chunk_size = 8192, TP = 8
-        ShapeArg(expected_m_per_group=256, n=512, k=7168, num_groups=256),
-        # Prefill, DeepSeek-R1, gateup, chunk_size = 8192, TP = 16
-        ShapeArg(expected_m_per_group=256, n=256, k=7168, num_groups=256),
-        # Prefill, DeepSeek-R1, gateup, chunk_size = 16384, TP = 16
-        ShapeArg(expected_m_per_group=512, n=256, k=7168, num_groups=256),
-        # Decode, DeepSeek-R1, gateup, bs = 32, TP = 8
-        ShapeArg(expected_m_per_group=1, n=512, k=7168, num_groups=256),
-        # Decode, DeepSeek-R1, gateup, bs = 64, TP = 16
-        ShapeArg(expected_m_per_group=2, n=256, k=7168, num_groups=256),
         # Prefill, DeepSeek-R1, gateup, chunk_size = 8192, EP = 8
         ShapeArg(expected_m_per_group=256, n=4096, k=7168, num_groups=32),
         # Prefill, DeepSeek-R1, gateup, chunk_size = 16384, EP = 16
-        ShapeArg(expected_m_per_group=512, n=4096, k=7168, num_groups=16),
-        # Decode, DeepSeek-R1, gateup, bs = 128, EP = 8
-        ShapeArg(expected_m_per_group=4, n=4096, k=7168, num_groups=32),
-        # Decode, DeepSeek-R1, gateup, bs = 256, EP = 16
-        ShapeArg(expected_m_per_group=8, n=4096, k=7168, num_groups=16),
-        # Prefill, Qwen3-235B-A22B-FP8, gateup, chunk_size = 16384, TP = 4
-        ShapeArg(expected_m_per_group=1024, n=768, k=4096, num_groups=128),
-        # Prefill, Qwen3-235B-A22B-FP8, down, chunk_size = 16384, TP = 4
-        ShapeArg(expected_m_per_group=1024, n=4096, k=384, num_groups=128),
-        # Decode, Qwen3-235B-A22B-FP8, gateup, bs = 256, TP = 4
-        ShapeArg(expected_m_per_group=16, n=768, k=4096, num_groups=128),
-        # Decode, Qwen3-235B-A22B-FP8, down, bs = 256, TP = 4
-        ShapeArg(expected_m_per_group=16, n=4096, k=384, num_groups=128),
+        # ShapeArg(expected_m_per_group=512, n=4096, k=7168, num_groups=16)
     ]
     args = parser.parse_args()
     benchmark_one_shape(shape_args, args.num_warmup, args.num_run)
