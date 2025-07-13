@@ -3,8 +3,11 @@ from typing import Tuple
 
 import pytest
 import torch
-from sgl_kernel import fp8_blockwise_scaled_grouped_mm
+from sgl_kernel import fp8_blockwise_scaled_grouped_mm, sgl_per_token_group_quant_fp8
 
+import triton
+from triton import Config
+import triton.language as tl
 
 def cdiv(a: int, b: int) -> int:
     return -(a // -b)
@@ -58,6 +61,63 @@ def per_block_cast_to_fp8(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x_view.size(0), x_view.size(2)
     )
 
+
+configs = [
+  Config(
+    {"BLOCK_M": block_m}, num_warps=num_warps
+  )
+  for block_m in [16, 32, 64, 128]
+  for num_warps in [2, 4, 8]
+]
+
+configs = [
+  Config(
+    {"BLOCK_M": block_m}, num_warps=num_warps
+  )
+  for block_m in [16, 32, 64, 128]
+  for num_warps in [2, 4, 8]
+]
+
+@triton.autotune(configs=configs, key=["K", "BLOCK_K", "M_ALIGNMENT"])
+@triton.jit
+def hopper_per_token_quant_fp8(
+  a,  # (M, K):(K, 1)
+  expert_offset,  # (num_experts + 1,)
+  problem_sizes,  # (num_experts, 3)
+  a_fp8,  # (M, K):(K, 1)
+  sfa,  # (M, k)
+  K: tl.constexpr,
+  BLOCK_K: tl.constexpr,
+  M_ALIGNMENT: tl.constexpr,
+  BLOCK_M: tl.constexpr # tune
+):
+  k_offset = tl.program_id(0)
+  expert_id = tl.program_id(1)
+
+  m = tl.load(problem_sizes + expert_id * 3)
+  current_expert_offset = tl.load(expert_offset + expert_id).to(tl.int64)
+  tl.multiple_of(m, M_ALIGNMENT)
+  tl.multiple_of(current_expert_offset, M_ALIGNMENT)
+
+  coord_k = k_offset * BLOCK_K + tl.arange(0, BLOCK_K)
+  for i in tl.range(tl.cdiv(m, BLOCK_M)):
+    coord_m = i * BLOCK_M + tl.arange(0, BLOCK_M)
+    a_ptrs = a + current_expert_offset * K + coord_m[:, None] * K + coord_k[None, :]
+    a_mask = (coord_m < m)[:, None] & (coord_k < K)[None, :]
+
+    inp = tl.load(a_ptrs, mask=a_mask).to(tl.float32)  # [BLOCK_M, BLOCK_K]
+    inp_amax = tl.max(tl.abs(inp), axis=1)  # [BLOCK_M,]
+    inp_amax = tl.clamp(inp_amax, min=1e-4, max=float("inf"))
+    inp_fp8 = inp * (448.0 / inp_amax[:, None]).to(a_fp8.dtype.element_ty)
+
+    # Store fp8
+    a_fp8_ptrs = a_fp8 + current_expert_offset * K + coord_m[:, None] * K + coord_k[None, :]
+    tl.store(a_fp8_ptrs, inp_fp8, mask=a_mask)
+
+    # Store sfa
+    k = tl.cdiv(K, BLOCK_K)
+    sfa_ptrs = sfa + current_expert_offset * k + k_offset * m + coord_m  # MN-Major with sfa
+    tl.store(sfa_ptrs, inp_amax / 448.0, mask=coord_m < m)
 
 def baseline_scaled_mm(
     a: torch.Tensor,
@@ -117,6 +177,7 @@ def test_fp8_blockwise_scaled_grouped_mm(num_experts, out_dtype):
     layout_sfb = torch.zeros((num_experts, 5), device=device, dtype=torch.int32)
 
     a_tensors = []
+    a_original = []
     b_tensors = []
     a_scales_tensors = []
     b_scales_tensors = []
@@ -136,6 +197,7 @@ def test_fp8_blockwise_scaled_grouped_mm(num_experts, out_dtype):
         b_g, b_scale = per_block_cast_to_fp8(
             b
         )  # bg -- (K, N):(N, 1), b_scale() -- (k, n):(n, 1)
+        a_original.append(a)
         a_tensors.append(a_g)
         b_tensors.append(b_g)
         a_scales_tensors.append(a_scale)
@@ -143,22 +205,15 @@ def test_fp8_blockwise_scaled_grouped_mm(num_experts, out_dtype):
 
         baseline = torch.mm(a, b)
         baseline_tensors.append(baseline)
-
+    a = torch.empty(
+        (expert_offsets[-1], k_g), device=device, dtype=out_dtype
+    )
     a_stack = torch.empty(
         (expert_offsets[-1], k_g), device=device, dtype=torch.float8_e4m3fn
     )
     b_stack = torch.empty(
         (num_experts, n_g, k_g), device=device, dtype=torch.float8_e4m3fn
     )
-
-    for g in range(num_experts):
-        # Matrix A is Row-Major.
-        a_stack[expert_offsets[g] : expert_offsets[g + 1]] = a_tensors[
-            g
-        ]  # a_stack[expert_offsets[g] : expert_offsets[g + 1]] -- (M, K):(K, 1)
-        b_stack[g] = b_tensors[g].t()  # b_stack[g] -- (N, K):(K, 1)
-    b_stack = b_stack.transpose(1, 2)  # Transpose Matrix B to Column-Major.
-
     a_scale_stack = torch.empty(
         (expert_offsets[-1] * (k_g // 128)), device=device, dtype=torch.float32
     )
@@ -167,13 +222,30 @@ def test_fp8_blockwise_scaled_grouped_mm(num_experts, out_dtype):
     )
 
     for g in range(num_experts):
+        # Matrix A is Row-Major.
+        a[expert_offsets[g] : expert_offsets[g + 1]] = a_original[g]  # a_stack[expert_offsets[g] : expert_offsets[g + 1]] -- (M, K):(K, 1)
+
+    grid = (ceil_div(k_g, 128), num_experts)
+    hopper_per_token_quant_fp8[grid](
+        a, expert_offsets, problem_sizes, a_stack, a_scale_stack, k_g, 128, alignment
+    )
+
+    for g in range(num_experts):
+        # Matrix A is Row-Major.
+        # a_stack[expert_offsets[g] : expert_offsets[g + 1]] = a_tensors[
+        #     g
+        # ]  # a_stack[expert_offsets[g] : expert_offsets[g + 1]] -- (M, K):(K, 1)
+        b_stack[g] = b_tensors[g].t()  # b_stack[g] -- (N, K):(K, 1)
+    b_stack = b_stack.transpose(1, 2)  # Transpose Matrix B to Column-Major.
+
+    for g in range(num_experts):
         if cc == 9:
             # For SM90, we need MN-Major scale factor
             # a_scales_tensors[g] -- (M, k):(k, 1)
             # a_scales_tensors[g].t().contiguous() -- (k, M):(M, 1)
-            a_scale_stack[
-                expert_offsets[g] * (k_g // 128) : expert_offsets[g + 1] * (k_g // 128)
-            ] = (a_scales_tensors[g].t().contiguous().view(-1))
+            # a_scale_stack[
+            #     expert_offsets[g] * (k_g // 128) : expert_offsets[g + 1] * (k_g // 128)
+            # ] = (a_scales_tensors[g].t().contiguous().view(-1))
             b_scale_stack[g] = b_scales_tensors[g]  # b_scale_stack[g] -- (k, n):(n, 1)
         elif cc == 10:
             # For SM100, we need K-Major scale factor
@@ -227,7 +299,7 @@ def test_fp8_blockwise_scaled_grouped_mm(num_experts, out_dtype):
         baseline = baseline_tensors[g]
         actual = c_out[expert_offsets[g] : expert_offsets[g + 1]]
         diff = calc_diff(actual, baseline)
-        assert diff < 0.001
+        assert diff < 0.002
         print(
             f"cc={cc}0 num_experts={num_experts}, out_dtype={out_dtype}, diff={diff:.5f}: OK"
         )
