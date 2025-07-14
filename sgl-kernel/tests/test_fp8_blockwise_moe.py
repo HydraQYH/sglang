@@ -8,6 +8,7 @@ from sgl_kernel import fp8_blockwise_scaled_grouped_mm, sgl_per_token_group_quan
 import triton
 from triton import Config
 import triton.language as tl
+from triton.language.extra import libdevice
 
 def cdiv(a: int, b: int) -> int:
     return -(a // -b)
@@ -108,7 +109,8 @@ def hopper_per_token_quant_fp8(
     inp = tl.load(a_ptrs, mask=a_mask).to(tl.float32)  # [BLOCK_M, BLOCK_K]
     inp_amax = tl.max(tl.abs(inp), axis=1)  # [BLOCK_M,]
     inp_amax = tl.clamp(inp_amax, min=1e-4, max=float("inf"))
-    inp_fp8 = inp * (448.0 / inp_amax[:, None]).to(a_fp8.dtype.element_ty)
+    # inp_fp8 = inp * (448.0 / inp_amax[:, None]).to(a_fp8.dtype.element_ty)
+    inp_fp8 = (inp * libdevice.fast_dividef(float(448.0), inp_amax[:, None])).to(a_fp8.dtype.element_ty)
 
     # Store fp8
     a_fp8_ptrs = a_fp8 + current_expert_offset * K + coord_m[:, None] * K + coord_k[None, :]
@@ -117,7 +119,7 @@ def hopper_per_token_quant_fp8(
     # Store sfa
     k = tl.cdiv(K, BLOCK_K)
     sfa_ptrs = sfa + current_expert_offset * k + k_offset * m + coord_m  # MN-Major with sfa
-    tl.store(sfa_ptrs, inp_amax / 448.0, mask=coord_m < m)
+    tl.store(sfa_ptrs, libdevice.fast_dividef(inp_amax, float(448.0)), mask=coord_m < m)
 
 def baseline_scaled_mm(
     a: torch.Tensor,
