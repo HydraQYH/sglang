@@ -10,21 +10,6 @@ from sglang.srt.layers.quantization.fp8_kernel import (
 )
 
 
-def cdiv(a: int, b: int) -> int:
-    return -(a // -b)
-
-
-def scale_shape(shape, group_shape):
-    return tuple(cdiv(shape[i], group_shape[i]) for i in range(len(group_shape)))
-
-
-def to_fp8(tensor: torch.Tensor) -> torch.Tensor:
-    finfo = torch.finfo(torch.float8_e4m3fn)
-    return torch.round(tensor.clamp(min=finfo.min, max=finfo.max)).to(
-        dtype=torch.float8_e4m3fn
-    )
-
-
 # Copy from: https://github.com/deepseek-ai/DeepGEMM/blob/main/deep_gemm/utils.py
 def calc_diff(x, y):
     x, y = x.double(), y.double()
@@ -61,33 +46,6 @@ def per_block_cast_to_fp8(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     return x_scaled.view_as(x_padded)[:m, :n].contiguous(), (x_amax / 448.0).view(
         x_view.size(0), x_view.size(2)
     )
-
-
-def baseline_scaled_mm(
-    a: torch.Tensor,
-    b: torch.Tensor,
-    scale_a: torch.Tensor,
-    scale_b: torch.Tensor,
-    out_dtype: type[torch.dtype],
-) -> torch.Tensor:
-
-    def group_broadcast(t, shape):
-        for i, s in enumerate(shape):
-            if t.shape[i] != s and t.shape[i] != 1:
-                assert s % t.shape[i] == 0
-                t = (
-                    t.unsqueeze(i + 1)
-                    .expand(*t.shape[: i + 1], s // t.shape[i], *t.shape[i + 1 :])
-                    .flatten(i, i + 1)
-                )
-        return t
-
-    scale_a = group_broadcast(scale_a, a.shape)
-    scale_b = group_broadcast(scale_b, b.shape)
-
-    return torch.mm(
-        (scale_a * a.to(dtype=torch.float32)), (scale_b * b.to(dtype=torch.float32))
-    ).to(out_dtype)
 
 
 def is_sm100_supported(device=None) -> bool:
