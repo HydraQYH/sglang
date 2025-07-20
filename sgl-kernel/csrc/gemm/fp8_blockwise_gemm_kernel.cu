@@ -373,6 +373,7 @@ torch::Tensor fp8_blockwise_scaled_mm(
     TORCH_CHECK(scales_b.stride(0) == 1, "SM100 scales_b must be K major");
   }
 
+  TORCH_CHECK(mat_a.size(0) == scales_a.size(0), "size of scales_a is not matched");
   TORCH_CHECK(scales_a.stride(0) == 1, "scales_a must be MN major");
   TORCH_CHECK(mat_a.size(1) / 128 == scales_a.size(1), "size of scales_a is not matched");
   TORCH_CHECK(mat_b.size(0) / 128 == scales_b.size(0), "size of scales_b is not matched");

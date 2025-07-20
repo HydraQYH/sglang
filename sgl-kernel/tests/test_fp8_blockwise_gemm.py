@@ -125,21 +125,18 @@ def _test_accuracy_once(M, N, K, out_dtype, device):
 
     a_g, a_scale = per_token_cast_to_fp8(
         a
-    )  # ag -- (M, K):(K, 1), a_scale() -- (M, k):(k, 1)
+    )  # a_g -- (M, K):(K, 1), a_scale() -- (M, k):(k, 1)
     b_g, b_scale = per_block_cast_to_fp8(
         b
     )  # b_g -- (K, N):(N, 1), b_scale() -- (k, n):(n, 1)
     baseline = torch.mm(a, b)
-    # a_g, a_scale = (a_g, get_col_major_tma_aligned_tensor(a_scale))
-    b_g = b_g.t().contiguous().t()  # b_g -- (K,N):(1,N)
-    # Transpose Matrix B to K-Major.
-    # a_scale = a_scale.t().contiguous()
-    if cc == 9:
-        # For SM90, we need MN-Major scale factor
-        a_scale = a_scale.t().contiguous().t()  # (M, k):(1, k)
-
-    elif cc == 10:
-        b_scale = b_scale.t().contiguous()  # (k, n):(1, n)
+    # Transpose Matrix B to Column-Major
+    b_g = b_g.t().contiguous().t()  # b_g -- (K, N):(1, N)
+    # Transpose SFA to MN-Major (for both SM90 and SM100)
+    a_scale = a_scale.t().contiguous().t()  # (M, k):(1, M)
+    if cc == 10:
+        # For SM100, we need K-Major SFB
+        b_scale = b_scale.t().contiguous().t()  # (k, n):(1, n)
 
     o1 = fp8_blockwise_scaled_mm(a_g, b_g, a_scale, b_scale, out_dtype)
     diff = calc_diff(o1, baseline)
@@ -148,14 +145,10 @@ def _test_accuracy_once(M, N, K, out_dtype, device):
     # torch.testing.assert_close(o, o1, rtol=rtol, atol=atol)
 
 
-# @pytest.mark.parametrize("M", [1, 3, 5, 127, 128, 512, 1024, 4096])
-# @pytest.mark.parametrize("N", [128, 512, 1024, 4096, 8192, 14080])
-# @pytest.mark.parametrize("K", [512, 1024, 4096, 8192, 14080, 16384])
-# @pytest.mark.parametrize("out_dtype", [torch.bfloat16, torch.float16])
-@pytest.mark.parametrize("M", [128])
-@pytest.mark.parametrize("N", [128])
-@pytest.mark.parametrize("K", [512])
-@pytest.mark.parametrize("out_dtype", [torch.bfloat16])
+@pytest.mark.parametrize("M", [1, 3, 5, 127, 128, 512, 1024, 4096])
+@pytest.mark.parametrize("N", [128, 512, 1024, 4096, 8192, 14080])
+@pytest.mark.parametrize("K", [512, 1024, 4096, 8192, 14080, 16384])
+@pytest.mark.parametrize("out_dtype", [torch.bfloat16, torch.float16])
 def test_accuracy(M, N, K, out_dtype):
     _test_accuracy_once(M, N, K, out_dtype, "cuda")
 
