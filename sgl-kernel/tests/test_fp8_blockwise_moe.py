@@ -10,21 +10,6 @@ from sglang.srt.layers.quantization.fp8_kernel import (
 )
 
 
-def cdiv(a: int, b: int) -> int:
-    return -(a // -b)
-
-
-def scale_shape(shape, group_shape):
-    return tuple(cdiv(shape[i], group_shape[i]) for i in range(len(group_shape)))
-
-
-def to_fp8(tensor: torch.Tensor) -> torch.Tensor:
-    finfo = torch.finfo(torch.float8_e4m3fn)
-    return torch.round(tensor.clamp(min=finfo.min, max=finfo.max)).to(
-        dtype=torch.float8_e4m3fn
-    )
-
-
 # Copy from: https://github.com/deepseek-ai/DeepGEMM/blob/main/deep_gemm/utils.py
 def calc_diff(x, y):
     x, y = x.double(), y.double()
