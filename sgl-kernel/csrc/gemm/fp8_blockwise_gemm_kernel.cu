@@ -353,7 +353,7 @@ torch::Tensor fp8_blockwise_scaled_mm(
   TORCH_CHECK(mat_a.dim() == 2, "mat_a must be a 2D tensor");
   TORCH_CHECK(mat_b.dim() == 2, "mat_b must be a 2D tensor");
   TORCH_CHECK(mat_a.stride(1) == 1, "mat_a must be a row major tensor");
-  TORCH_CHECK(mat_b.stride(0) == 1, "mat_b must be a column major tensor");
+  TORCH_CHECK(mat_b.stride(0) == 1, "mat_a must be a column major tensor");
   TORCH_CHECK(mat_a.size(1) == mat_b.size(0), "mat_a and mat_b shapes cannot be multiplied");
 
   TORCH_CHECK(
@@ -375,7 +375,6 @@ torch::Tensor fp8_blockwise_scaled_mm(
   TORCH_CHECK(scales_a.stride(0) == 1 || is_contiguous_vector(scales_a), "scales_a must be M major");
   TORCH_CHECK(mat_b.size(0) / 128 == scales_b.size(0), "size of scales_b is not matched");
   TORCH_CHECK(mat_b.size(1) / 128 == scales_b.size(1), "size of scales_b is not matched");
-  TORCH_CHECK(scales_b.stride(0) == 1 || is_contiguous_vector(scales_b), "scales_b must be K major");
   TORCH_CHECK(scales_a.scalar_type() == torch::kFloat32, "scales_a must be Float32");
   TORCH_CHECK(scales_b.scalar_type() == torch::kFloat32, "scales_b must be Float32");
 
@@ -392,7 +391,9 @@ torch::Tensor fp8_blockwise_scaled_mm(
 #if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 #if defined CUDA_VERSION && CUDA_VERSION >= 12000
   if (sm_version == 90) {
-    torch::Tensor scales_b_contiguous = scales_b.contiguous();
+    bool scales_b_is_mn_major = (scales_b.stride(1) == 1) || is_contiguous_vector(scales_b);
+    torch::Tensor scales_b_contiguous = scales_b_is_mn_major ? scales_b : scales_b.contiguous();
+    ;
     if (out_dtype == torch::kBFloat16) {
       sm90_fp8_blockwise_dispatch_shape<cutlass::bfloat16_t>(
           out_padded, mat_a_padded, mat_b, scales_a_padded, scales_b_contiguous);
