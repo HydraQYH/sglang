@@ -148,7 +148,6 @@ struct Fp8BlockwiseGroupedGemmProblemSizeFilterFunctor<PerfConfigLowMHx00> {
 
   void CUTE_DEVICE operator()(int64_t expert_id, int m, int n, int k) {
     if (m <= 32) {
-      // Swap A/B
       problem_sizes[expert_id * 3 + 0] = n;
       problem_sizes[expert_id * 3 + 1] = m;
       problem_sizes[expert_id * 3 + 2] = k;
@@ -188,14 +187,34 @@ struct Fp8BlockwiseGroupedGemmProblemSizeFilterFunctor<PerfConfigMiddleMHx00> {
   Fp8BlockwiseGroupedGemmProblemSizeFilterFunctor(int* _problem_sizes) : problem_sizes(_problem_sizes) {}
 
   void CUTE_DEVICE operator()(int64_t expert_id, int m, int n, int k) {
-    if (m > 32 && m <= 64) {
-      problem_sizes[expert_id * 3 + 0] = n;
-      problem_sizes[expert_id * 3 + 1] = m;
-      problem_sizes[expert_id * 3 + 2] = k;
+    constexpr float ridge_point_h100 = 443.25f * 0.95f;
+    float m_f = __int2float_rn(m);
+    float n_f = __int2float_rn(n);
+    float k_f = __int2float_rn(k);
+    float arithmetic_intensity = 2.0f * m_f * n_f * k_f / (m_f * k_f + k_f * n_f + 2.0f * m_f * n_f);
+
+    if (arithmetic_intensity < ridge_point_h100) {
+      // Memory Bound
+      if (m > 32) {
+        problem_sizes[expert_id * 3 + 0] = n;
+        problem_sizes[expert_id * 3 + 1] = m;
+        problem_sizes[expert_id * 3 + 2] = k;
+      } else {
+        problem_sizes[expert_id * 3 + 0] = 0;
+        problem_sizes[expert_id * 3 + 1] = 0;
+        problem_sizes[expert_id * 3 + 2] = 0;
+      }
     } else {
-      problem_sizes[expert_id * 3 + 0] = 0;
-      problem_sizes[expert_id * 3 + 1] = 0;
-      problem_sizes[expert_id * 3 + 2] = 0;
+      // Compute Bound
+      if (m > 32 && m <= 64) {
+        problem_sizes[expert_id * 3 + 0] = n;
+        problem_sizes[expert_id * 3 + 1] = m;
+        problem_sizes[expert_id * 3 + 2] = k;
+      } else {
+        problem_sizes[expert_id * 3 + 0] = 0;
+        problem_sizes[expert_id * 3 + 1] = 0;
+        problem_sizes[expert_id * 3 + 2] = 0;
+      }
     }
   }
 };
@@ -228,14 +247,28 @@ struct Fp8BlockwiseGroupedGemmProblemSizeFilterFunctor<PerfConfigHighMHx00> {
   Fp8BlockwiseGroupedGemmProblemSizeFilterFunctor(int* _problem_sizes) : problem_sizes(_problem_sizes) {}
 
   void CUTE_DEVICE operator()(int64_t expert_id, int m, int n, int k) {
-    if (m > 64) {
-      problem_sizes[expert_id * 3 + 0] = m;
-      problem_sizes[expert_id * 3 + 1] = n;
-      problem_sizes[expert_id * 3 + 2] = k;
-    } else {
+    constexpr float ridge_point_h100 = 443.25f * 0.95f;
+    float m_f = __int2float_rn(m);
+    float n_f = __int2float_rn(n);
+    float k_f = __int2float_rn(k);
+    float arithmetic_intensity = 2.0f * m_f * n_f * k_f / (m_f * k_f + k_f * n_f + 2.0f * m_f * n_f);
+
+    if (arithmetic_intensity < ridge_point_h100) {
+      // Memory Bound
       problem_sizes[expert_id * 3 + 0] = 0;
       problem_sizes[expert_id * 3 + 1] = 0;
       problem_sizes[expert_id * 3 + 2] = 0;
+    } else {
+      // Compute Bound
+      if (m > 64) {
+        problem_sizes[expert_id * 3 + 0] = m;
+        problem_sizes[expert_id * 3 + 1] = n;
+        problem_sizes[expert_id * 3 + 2] = k;
+      } else {
+        problem_sizes[expert_id * 3 + 0] = 0;
+        problem_sizes[expert_id * 3 + 1] = 0;
+        problem_sizes[expert_id * 3 + 2] = 0;
+      }
     }
   }
 };
