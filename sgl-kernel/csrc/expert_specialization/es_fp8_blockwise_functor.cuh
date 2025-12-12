@@ -187,7 +187,7 @@ struct Fp8BlockwiseGroupedGemmProblemSizeFilterFunctor<PerfConfigMiddleMHx00> {
   Fp8BlockwiseGroupedGemmProblemSizeFilterFunctor(int* _problem_sizes) : problem_sizes(_problem_sizes) {}
 
   void CUTE_DEVICE operator()(int64_t expert_id, int m, int n, int k) {
-    constexpr float ridge_point_h100 = 443.25f * 0.95f;
+    constexpr float ridge_point_h100 = 141.96f * 0.8f;
     float m_f = __int2float_rn(m);
     float n_f = __int2float_rn(n);
     float k_f = __int2float_rn(k);
@@ -247,7 +247,7 @@ struct Fp8BlockwiseGroupedGemmProblemSizeFilterFunctor<PerfConfigHighMHx00> {
   Fp8BlockwiseGroupedGemmProblemSizeFilterFunctor(int* _problem_sizes) : problem_sizes(_problem_sizes) {}
 
   void CUTE_DEVICE operator()(int64_t expert_id, int m, int n, int k) {
-    constexpr float ridge_point_h100 = 443.25f * 0.95f;
+    constexpr float ridge_point_h100 = 141.96f * 0.8f;
     float m_f = __int2float_rn(m);
     float n_f = __int2float_rn(n);
     float k_f = __int2float_rn(k);
