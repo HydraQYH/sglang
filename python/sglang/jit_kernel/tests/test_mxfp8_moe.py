@@ -4,8 +4,9 @@ import sys
 import pytest
 import torch
 
-from sglang.jit_kernel.mxfp8 import (  # es_sm100_mxfp8_blockscaled_grouped_mm,
+from sglang.jit_kernel.mxfp8 import (
     es_sm100_mxfp8_blockscaled_grouped_quant,
+    es_sm100_mxfp8_blockscaled_moe_grouped_gemm,
 )
 
 random.seed(42)
@@ -34,10 +35,10 @@ def is_sm100_supported(device=None) -> bool:
 
 @pytest.mark.skipif(
     not is_sm100_supported(),
-    reason="test_es_sm100_mxfp8_blockscaled_grouped_mm at sgl-kernel is only supported on sm100",
+    reason="test_mxfp8_moe at jit kernen is only supported on sm100",
 )
-@pytest.mark.parametrize("num_experts", [8])
-@pytest.mark.parametrize("out_dtype", [torch.bfloat16])
+@pytest.mark.parametrize("num_experts", [8, 16, 32, 64])
+@pytest.mark.parametrize("out_dtype", [torch.half, torch.bfloat16])
 def test_es_sm100_mxfp8_blockscaled_grouped_mm(num_experts, out_dtype):
     device = "cuda"
     alignment = 128
@@ -52,14 +53,14 @@ def test_es_sm100_mxfp8_blockscaled_grouped_mm(num_experts, out_dtype):
     a_blockscale_offsets = []
     b_blockscale_offset = 0
     b_blockscale_offsets = []
-    problem_sizes = []
-    aux_problem_sizes = []
     a_list = []
     b_list = []
     ref_d_list = []
+    tokens_per_expert = []
 
     for g in range(num_experts):
         m_g = random.randint(1, 512)
+        tokens_per_expert.append(m_g)
         expert_offsets.append(expert_offset)
         expert_offset += m_g
         aux_expert_offsets.append(aux_expert_offset)
@@ -68,8 +69,6 @@ def test_es_sm100_mxfp8_blockscaled_grouped_mm(num_experts, out_dtype):
         a_blockscale_offset += align(m_g, 128)
         b_blockscale_offsets.append(b_blockscale_offset)
         b_blockscale_offset += n_g  # n_g already align to 128
-        problem_sizes.append([m_g, n_g, k_g])
-        aux_problem_sizes.append([n_g, m_g, k_g])
 
         a = torch.normal(
             0.0, std=1.0, size=(m_g, k_g), device=device, dtype=out_dtype
@@ -85,10 +84,6 @@ def test_es_sm100_mxfp8_blockscaled_grouped_mm(num_experts, out_dtype):
     a = torch.concat(a_list, dim=0)
     b = torch.concat(b_list, dim=0)
 
-    _problem_sizes = torch.tensor(problem_sizes).to(device=device, dtype=torch.int32)
-    _aux_problem_sizes = torch.tensor(aux_problem_sizes).to(
-        device=device, dtype=torch.int32
-    )
     _expert_offsets = torch.tensor(expert_offsets).to(device=device, dtype=torch.int32)
     _aux_expert_offsets = torch.tensor(aux_expert_offsets).to(
         device=device, dtype=torch.int32
@@ -107,51 +102,52 @@ def test_es_sm100_mxfp8_blockscaled_grouped_mm(num_experts, out_dtype):
 
     b_quant = torch.zeros_like(b, dtype=torch.float8_e4m3fn, device=device)
     b_scale_factor = torch.zeros(
-        (num_experts, n_g, k_g // 32), dtype=torch.uint8, device=device
+        (num_experts * n_g, k_g // 32), dtype=torch.uint8, device=device
     )
+    tokens_per_expert = torch.tensor(tokens_per_expert).to(
+        device=device, dtype=torch.int32
+    )
+    workspace = torch.empty((1024, 1024, 1024), dtype=torch.uint8, device=device)
 
     es_sm100_mxfp8_blockscaled_grouped_quant(
         a,
-        _problem_sizes,
+        tokens_per_expert,
         _expert_offsets,
         _a_blockscale_offsets,
         a_quant,
         a_scale_factor,
     )
-    return
-    """
     es_sm100_mxfp8_blockscaled_grouped_quant(
         b,
-        _aux_problem_sizes,
+        torch.ones_like(tokens_per_expert) * n_g,
         _aux_expert_offsets,
         _b_blockscale_offsets,
         b_quant,
         b_scale_factor,
     )
-    b_quant = b_quant.view(num_experts, n_g, k_g).transpose(1, 2)
-    b_scale_factor = b_scale_factor.view(num_experts, n_g, k_g // 32).transpose(1, 2)
 
-    d = torch.empty((expert_offset, n_g), device=device, dtype=out_dtype)
-    es_sm100_mxfp8_blockscaled_grouped_mm(
-        d,
-        a_quant,
+    b_quant = b_quant.view(num_experts, n_g, k_g)
+    b_scale_factor = b_scale_factor.view(num_experts, n_g, k_g // 32)
+    d = es_sm100_mxfp8_blockscaled_moe_grouped_gemm(
         b_quant,
-        a_scale_factor,
+        a_quant,
         b_scale_factor,
-        _problem_sizes,
+        a_scale_factor,
         _expert_offsets,
         _a_blockscale_offsets,
+        tokens_per_expert,
+        workspace,
+        a.dtype,
     )
 
     for g in range(num_experts):
         baseline = ref_d_list[g]
-        actual = d[expert_offsets[g] : (expert_offsets[g] + problem_sizes[g][0])]
+        actual = d[expert_offsets[g] : (expert_offsets[g] + tokens_per_expert[g])]
         diff = calc_diff(actual, baseline)
         assert diff < 0.001
         print(
             f"m_g={baseline.shape[0]} n_g={n_g} k_g={k_g} num_experts={num_experts}, out_dtype={out_dtype}, diff={diff:.5f}: OK"
         )
-    """
 
 
 if __name__ == "__main__":

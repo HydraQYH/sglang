@@ -264,12 +264,13 @@ __inline__ __device__ void mxfp8_group_quant_tile(
 template <typename T_IN, typename TiledCopyG2R, typename TiledCopyR2G, typename TiledCopyR2S>
 __global__ void mxfp8_group_quant(
     const T_IN* input,
-    const int* problem_sizes,
+    const int* tokens_per_expert,
     const int* expert_offsets,
     const int* blockscale_offsets,
     cutlass::float_e4m3_t* quant_output,
     uint8_t* scale_factor,
     int groups,
+    int k,
     TiledCopyG2R tiled_copy_g2r,
     TiledCopyR2G tiled_copy_r2g,
     TiledCopyR2S tiled_copy_r2s) {
@@ -283,8 +284,7 @@ __global__ void mxfp8_group_quant(
   uint group_total_tiles = 0;
   uint head_cta_id = 0;
   for (int g = 0; g < groups; g++) {
-    int m = problem_sizes[g * 3 + 0];
-    int k = problem_sizes[g * 3 + 2];
+    int m = tokens_per_expert[g];
     int64_t expert_offset = static_cast<int64_t>(expert_offsets[g]);
     int64_t blockscale_offset = static_cast<int64_t>(blockscale_offsets[g]);
 
@@ -364,12 +364,13 @@ __global__ void mxfp8_group_quant(
 template <typename T_IN>
 void launch_es_sm100_mxfp8_blockscaled_grouped_quant(
     const T_IN* input,
-    const int* problem_sizes,
+    const int* tokens_per_expert,
     const int* expert_offsets,
     const int* blockscale_offsets,
     cutlass::float_e4m3_t* quant_output,
     uint8_t* scale_factor,
     int num_experts,
+    int k,
     int sm_count,
     cudaStream_t stream) {
   ThrLayout thr_layout{};
@@ -402,12 +403,13 @@ void launch_es_sm100_mxfp8_blockscaled_grouped_quant(
   mxfp8_group_quant<T_IN, decltype(tiled_copy_g2r), decltype(tiled_copy_r2g), decltype(tiled_copy_r2s)>
       <<<grid, block, 0, stream>>>(
           input,
-          problem_sizes,
+          tokens_per_expert,
           expert_offsets,
           blockscale_offsets,
           quant_output,
           scale_factor,
           num_experts,
+          k,
           tiled_copy_g2r,
           tiled_copy_r2g,
           tiled_copy_r2s);
@@ -419,7 +421,7 @@ template <typename DType>
 struct EsSm100MXFP8BlockscaledGroupQuant {
   static void
   run(const tvm::ffi::TensorView input,
-      const tvm::ffi::TensorView problem_sizes,
+      const tvm::ffi::TensorView tokens_per_expert,
       const tvm::ffi::TensorView expert_offsets,
       const tvm::ffi::TensorView blockscale_offsets,
       tvm::ffi::TensorView quant_output,
@@ -434,7 +436,7 @@ struct EsSm100MXFP8BlockscaledGroupQuant {
     device.set_options<kDLCUDA>();
 
     TensorMatcher({N, D}).with_strides({D, 1}).with_dtype<DType>().with_device(device).verify(input);
-    TensorMatcher({G, 3}).with_strides({3, 1}).with_dtype<int>().with_device(device).verify(problem_sizes);
+    TensorMatcher({G}).with_dtype<int>().with_device(device).verify(tokens_per_expert);
     TensorMatcher({G}).with_dtype<int>().with_device(device).verify(expert_offsets);
     TensorMatcher({G}).with_dtype<int>().with_device(device).verify(blockscale_offsets);
     RuntimeCheck(D.unwrap() % 128 == 0, "k must align to 128");
@@ -446,12 +448,13 @@ struct EsSm100MXFP8BlockscaledGroupQuant {
     cudaStream_t stream = LaunchKernel::resolve_device(device.unwrap());
     expert_specialization::launch_es_sm100_mxfp8_blockscaled_grouped_quant<DType>(
         reinterpret_cast<const DType*>(input.data_ptr()),
-        reinterpret_cast<const int*>(problem_sizes.data_ptr()),
+        reinterpret_cast<const int*>(tokens_per_expert.data_ptr()),
         reinterpret_cast<const int*>(expert_offsets.data_ptr()),
         reinterpret_cast<const int*>(blockscale_offsets.data_ptr()),
         reinterpret_cast<cutlass::float_e4m3_t*>(quant_output.data_ptr()),
         reinterpret_cast<uint8_t*>(scale_factor.data_ptr()),
         static_cast<int>(G.unwrap()),
+        static_cast<int>(D.unwrap()),
         runtime::get_sm_count(device.unwrap().device_id),
         stream);
   }
