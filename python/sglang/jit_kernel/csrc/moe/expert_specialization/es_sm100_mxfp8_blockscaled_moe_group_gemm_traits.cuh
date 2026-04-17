@@ -29,13 +29,13 @@ using namespace cute;
 
 // Different configs for 1SM and 2SM MMA kernel
 struct MMA2SMConfig {
-  using MmaTileShape = Shape<_256, _256, _128>;
+  using MmaTileShape = Shape<_256, _128, _128>;
   using KernelSchedule = cutlass::gemm::KernelPtrArrayTmaWarpSpecialized2SmMxf8f6f4Sm100;
   using EpilogueSchedule = cutlass::epilogue::PtrArrayTmaWarpSpecialized2Sm;
   const static dim3 preferred_cluster;
   const static dim3 fallback_cluster;
 };
-const dim3 MMA2SMConfig::preferred_cluster(2, 1, 1);
+const dim3 MMA2SMConfig::preferred_cluster(4, 1, 1);
 const dim3 MMA2SMConfig::fallback_cluster(2, 1, 1);
 
 template <typename _MMAConfig, typename OutputDtype>
@@ -85,7 +85,7 @@ struct ExpertSpecializationSm100MXFP8BlockscaledMoeGroupGemmTraits {
       OperatorClass,
       typename MMAConfig::MmaTileShape,
       ClusterShape,
-      Shape<_128, _64>,
+      cutlass::epilogue::collective::EpilogueTileAuto,
       ElementAccumulator,
       ElementAccumulator,
       ElementC,
