@@ -204,9 +204,19 @@ def _sgl_kernel_group_mm(case: dict[str, Any]) -> torch.Tensor:
 shape_range = get_benchmark_range(
     full_range=[
         # (total_tokens, n_g, k_g, num_experts)
-        # (1024, 4096, 4096, 64),
-        # (2048, 4096, 4096, 64),
+        (1024, 4096, 4096, 64),
+        (2048, 4096, 4096, 64),
         (4096, 4096, 4096, 64),
+    ]
+    + [
+        (total_tokens, n_g, k_g, num_experts)
+        for total_tokens in [32 * (2**i) for i in range(9)]  # 32 to 8192
+        for n_g, k_g, num_experts in [
+            # DeepSeek-V3/R1, gateup, TP = 1, EP = 8
+            (4096, 7168, 32),
+            # DeepSeek-V3/R1, down, TP = 1, EP = 8
+            (7168, 2048, 32),
+        ]
     ],
     ci_range=[(1024, 2048, 2048, 8)],
 )
