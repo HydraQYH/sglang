@@ -42,7 +42,7 @@ def _mxfp8_arch_env():
 
 
 @cache_once
-def _jit_es_sm100_mxfp8_blocksclaed_group_quant(dtype: torch.dtype) -> Module:
+def _jit_es_sm100_mxfp8_blockscaled_group_quant(dtype: torch.dtype) -> Module:
     args = make_cpp_args(dtype)
     with _mxfp8_arch_env():
         return load_jit(
