@@ -111,7 +111,7 @@ def es_sm100_mxfp8_blockscaled_moe_grouped_gemm(
     blockscale_offsets: torch.Tensor,
     tokens_per_expert: torch.Tensor,
     workspace: torch.Tensor,
-    dtype: torch.Dtype,
+    dtype: torch.dtype,
 ) -> torch.Tensor:
     num_experts, m, tokens = a.shape[0], a.shape[1], b.shape[0]
     d = torch.empty((tokens, m), device=a.device, dtype=dtype)
