@@ -46,14 +46,14 @@ def _jit_es_sm100_mxfp8_blockscaled_group_quant(dtype: torch.dtype) -> Module:
     args = make_cpp_args(dtype)
     with _mxfp8_arch_env():
         return load_jit(
-            "es_sm100_mxfp8_blocksclaed_group_quant",
+            "es_sm100_mxfp8_blockscaled_group_quant",
             *args,
             cuda_files=[
                 "moe/expert_specialization/es_sm100_mxfp8_blockscaled_group_quant.cuh"
             ],
             cuda_wrappers=[
                 (
-                    "es_sm100_mxfp8_blocksclaed_group_quant",
+                    "es_sm100_mxfp8_blockscaled_group_quant",
                     f"EsSm100MXFP8BlockscaledGroupQuant<{args}>::run",
                 )
             ],
@@ -63,11 +63,11 @@ def _jit_es_sm100_mxfp8_blockscaled_group_quant(dtype: torch.dtype) -> Module:
 
 
 @cache_once
-def _jit_es_sm100_mxfp8_blocksclaed_moe_group_gemm(dtype: torch.dtype) -> Module:
+def _jit_es_sm100_mxfp8_blockscaled_moe_group_gemm(dtype: torch.dtype) -> Module:
     args = make_cpp_args(dtype)
     with _mxfp8_arch_env():
         return load_jit(
-            "es_sm100_mxfp8_blocksclaed_moe_group_gemm",
+            "es_sm100_mxfp8_blockscaled_moe_group_gemm",
             *args,
             cuda_files=[
                 "moe/expert_specialization/es_sm100_mxfp8_blockscaled_moe_group_gemm.cuh"
@@ -91,8 +91,8 @@ def es_sm100_mxfp8_blockscaled_grouped_quant(
     quant_output: torch.Tensor,
     scale_factor: torch.Tensor,
 ) -> None:
-    module = _jit_es_sm100_mxfp8_blocksclaed_group_quant(input.dtype)
-    module.es_sm100_mxfp8_blocksclaed_group_quant(
+    module = _jit_es_sm100_mxfp8_blockscaled_group_quant(input.dtype)
+    module.es_sm100_mxfp8_blockscaled_group_quant(
         input,
         tokens_per_expert,
         expert_offsets,
@@ -118,7 +118,7 @@ def es_sm100_mxfp8_blockscaled_moe_grouped_gemm(
     d_ptrs = torch.empty((num_experts,), device=a.device, dtype=torch.int64)
     b_ptrs = torch.empty((num_experts,), device=a.device, dtype=torch.int64)
     sfb_ptrs = torch.empty((num_experts,), device=a.device, dtype=torch.int64)
-    module = _jit_es_sm100_mxfp8_blocksclaed_moe_group_gemm(dtype)
+    module = _jit_es_sm100_mxfp8_blockscaled_moe_group_gemm(dtype)
     module.es_sm100_mxfp8_blockscaled_moe_group_gemm(
         a,
         b,
