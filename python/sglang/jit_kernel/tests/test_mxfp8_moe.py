@@ -8,7 +8,6 @@ from sglang.jit_kernel.mxfp8 import (
     es_sm100_mxfp8_blockscaled_grouped_quant,
     es_sm100_mxfp8_blockscaled_moe_grouped_gemm,
 )
-
 from sglang.test.ci.ci_register import register_cuda_ci
 
 register_cuda_ci(est_time=5, suite="stage-b-kernel-unit-1-gpu-large")
