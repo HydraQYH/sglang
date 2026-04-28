@@ -9,10 +9,10 @@ from sglang.jit_kernel.mxfp8 import (
     es_sm100_mxfp8_blockscaled_moe_grouped_gemm,
 )
 
-random.seed(42)
-torch.manual_seed(42)
-torch.cuda.manual_seed(42)
-torch.cuda.manual_seed_all(42)
+from sglang.test.ci.ci_register import register_cuda_ci
+
+register_cuda_ci(est_time=5, suite="stage-b-kernel-unit-1-gpu-large")
+register_cuda_ci(est_time=120, suite="nightly-kernel-1-gpu", nightly=True)
 
 
 def align(val: int, alignment: int = 128) -> int:
