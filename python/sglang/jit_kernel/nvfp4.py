@@ -5,7 +5,12 @@ from typing import TYPE_CHECKING, Optional, Tuple
 
 import torch
 
-from sglang.jit_kernel.utils import cache_once, load_jit, override_jit_cuda_arch
+from sglang.jit_kernel.utils import (
+    cache_once,
+    load_jit,
+    make_cpp_args,
+    override_jit_cuda_arch,
+)
 from sglang.kernel_api_logging import debug_kernel_api
 from sglang.srt.utils.custom_op import register_custom_op
 
@@ -70,6 +75,26 @@ def _jit_nvfp4_quant_module() -> Module:
             ],
             cuda_wrappers=[
                 ("scaled_fp4_quant", "scaled_fp4_quant_sm100a_sm120a"),
+            ],
+            extra_cuda_cflags=_nvfp4_cuda_flags(),
+            extra_dependencies=["cutlass"],
+        )
+
+
+@cache_once
+def _jit_nvfp4_per_token_quant_module(dtype: torch.dtype) -> Module:
+    args = make_cpp_args(dtype)
+    with _nvfp4_arch_env():
+        return load_jit(
+            "nvfp4_quant",
+            cuda_files=[
+                "gemm/nvfp4/nvfp4_per_token_quant.cuh",
+            ],
+            cuda_wrappers=[
+                (
+                    "nvfp4_per_token_quant",
+                    f"Nvfp4PerTokenQuant<{args}>::run",
+                ),
             ],
             extra_cuda_cflags=_nvfp4_cuda_flags(),
             extra_dependencies=["cutlass"],
@@ -224,6 +249,20 @@ def _scaled_fp4_quant_custom_op(
     module.scaled_fp4_quant(output, input, output_scale, input_global_scale)
 
 
+@register_custom_op(
+    op_name="nvfp4_per_token_quant",
+    mutates_args=["output", "output_sf", "per_token_sf"],
+)
+def _nvfp4_per_token_quant_custom_op(
+    input: torch.Tensor,
+    output: torch.Tensor,
+    output_sf: torch.Tensor,
+    per_token_sf: torch.Tensor,
+) -> None:
+    module = _jit_nvfp4_per_token_quant_module(input.dtype)
+    module.nvfp4_per_token_quant(output, input, output_sf, per_token_sf)
+
+
 @debug_kernel_api
 def scaled_fp4_quant(
     input: torch.Tensor, input_global_scale: torch.Tensor
@@ -259,6 +298,39 @@ def scaled_fp4_quant(
     _scaled_fp4_quant_custom_op(input, output, output_scale, input_global_scale)
     output_scale = output_scale.view(torch.float8_e4m3fn)
     return output, output_scale
+
+
+@debug_kernel_api
+def nvfp4_per_token_quant(
+    input: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    assert input.ndim >= 1, f"input.ndim needs to be >= 1, but got {input.ndim}."
+    other_dims = 1 if input.ndim == 1 else -1
+    input = input.reshape(other_dims, input.shape[-1])
+    m, n = input.shape
+    block_size = 16
+    device = input.device
+
+    assert n % 64 == 0, f"last dim has to be multiple of 64, but got {n}."
+    assert input.dtype in (
+        torch.float16,
+        torch.bfloat16,
+    ), f"input.dtype needs to be fp16 or bf16 but got {input.dtype}."
+
+    output = torch.empty((m, n // 2), device=device, dtype=torch.uint8)
+
+    rounded_m = ((m + 128 - 1) // 128) * 128
+    scale_n = n // block_size  # Already align to 4
+
+    output_scale = torch.empty(
+        (rounded_m, scale_n), device=device, dtype=torch.float8_e4m3fn
+    )
+
+    per_token_sf = torch.empty((m,), device=device, dtype=torch.float32)
+
+    _nvfp4_per_token_quant_custom_op(input, output, output_scale, per_token_sf)
+    output_scale = output_scale.view(torch.float8_e4m3fn)
+    return output, output_scale, per_token_sf
 
 
 def _shuffle_rows_torch(
