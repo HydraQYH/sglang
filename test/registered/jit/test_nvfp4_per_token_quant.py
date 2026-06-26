@@ -1,6 +1,9 @@
+import sys
+
+import pytest
 import torch
 
-from sglang.jit_kernel.nvfp4 import nvfp4_per_token_quant
+from sglang.jit_kernel.nvfp4 import nvfp4_per_token_quant, scaled_fp4_quant
 from sglang.test.ci.ci_register import register_cuda_ci
 
 register_cuda_ci(est_time=5, suite="base-b-kernel-unit-1-gpu-large")
@@ -11,14 +14,8 @@ def _nvfp4_supported() -> bool:
     return torch.cuda.is_available() and torch.cuda.get_device_capability() >= (10, 0)
 
 
-DTYPES = [torch.float16, torch.bfloat16]
+DTYPES = [torch.bfloat16]
 SHAPES = [(128, 64), (128, 128), (256, 64), (256, 128)]
-PAD_SHAPES = [
-    (90, 64),
-    (150, 64),
-    (128, 48),
-    (128, 80),
-]
 
 FLOAT4_E2M1_MAX = 6.0
 FLOAT8_E4M3_MAX = torch.finfo(torch.float8_e4m3fn).max
@@ -97,20 +94,31 @@ def recover_swizzled_scales(scale: torch.Tensor, m: int, n: int) -> torch.Tensor
     return result[:m, :scale_n]
 
 
-# @pytest.mark.skipif(
-#     not _nvfp4_supported(), reason="NVFP4 requires compute capability >= 10.0"
-# )
-# @pytest.mark.parametrize("dtype", DTYPES)
-# @pytest.mark.parametrize("shape", SHAPES)
+@pytest.mark.skipif(
+    not _nvfp4_supported(), reason="NVFP4 requires compute capability >= 10.0"
+)
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize("shape", SHAPES)
 def test_quantize_to_fp4(dtype: torch.dtype, shape: tuple[int, int]) -> None:
-    torch.manual_seed(42)
+    # torch.manual_seed(42)
     m, n = shape
+    x = torch.randn((1, n), dtype=dtype, device="cuda").expand(m, n).contiguous()
 
-    x = torch.randn((m, n), dtype=dtype, device="cuda")
+    tensor_amax = torch.abs(x).max().to(torch.float32)
+    global_scale = FLOAT8_E4M3_MAX * FLOAT4_E2M1_MAX / tensor_amax
+    out_ref, scale_ref = ref_nvfp4_quant(x, global_scale)
+    out, out_scale = scaled_fp4_quant(x, global_scale)
+    per_token_out, per_token_out_scale, per_token_sf = nvfp4_per_token_quant(x)
+    out_ans = cast_from_fp4(out, m, n)
+    per_token_out_ans = cast_from_fp4(per_token_out, m, n)
+    scale_ans = recover_swizzled_scales(out_scale, m, n)
+    per_token_scale_ans = recover_swizzled_scales(per_token_out_scale, m, n)
 
-    out, out_scale, per_token_sf = nvfp4_per_token_quant(x)
-    torch.cuda.synchronize()
+    torch.testing.assert_close(out_ans, out_ref)
+    torch.testing.assert_close(per_token_out_ans, out_ref)
+    torch.testing.assert_close(scale_ans, scale_ref)
+    torch.testing.assert_close(per_token_scale_ans, scale_ref)
 
 
 if __name__ == "__main__":
-    test_quantize_to_fp4(torch.bfloat16, (4096, 4096))
+    sys.exit(pytest.main([__file__, "-v", "-s"]))

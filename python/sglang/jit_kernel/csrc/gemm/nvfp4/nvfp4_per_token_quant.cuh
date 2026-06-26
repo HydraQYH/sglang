@@ -179,7 +179,10 @@ SGL_DEVICE uint64_t nvfp4_per_token_quant_core(BlockType& block, float* SFScaleO
   fp8SFVal = tmp.__x;
   SFValue = static_cast<float>(tmp);
   // Get the output scale.
-  float outputScale = SFValue != 0 ? (E2M1MAX * reciprocal_approximate_ftz(blockMax)) : 0.0f;
+  // Recipe: final_scale = reciprocal(fp32(fp8(SFValue * SFScaleVal))) *
+  //                       reciprocal(SFScaleVal))
+  // float outputScale = SFValue != 0 ? (E2M1MAX * reciprocal_approximate_ftz(blockMax)) : 0.0f;
+  float outputScale = SFValue != 0 ? reciprocal_approximate_ftz(SFValue * SFScaleVal) : 0.0f;
 
   // Write the SF to global memory (STG.8).
   *SFout = fp8SFVal;
@@ -265,7 +268,7 @@ struct Nvfp4PerTokenQuant {
     int device_id = device.unwrap().device_id;
 
     if constexpr (std::is_same_v<DType, bf16_t> || std::is_same_v<DType, fp16_t>) {
-      dim3 block(_hidden_size / 64, 1, 1);
+      dim3 block(_hidden_size / 16, 1, 1);
       dim3 grid(num_tokens.unwrap(), 1, 1);
       nvfp4_per_token_quant<DType><<<grid, block, 0, stream>>>(
           reinterpret_cast<DType*>(input.data_ptr()),
