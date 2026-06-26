@@ -14,7 +14,7 @@ def _nvfp4_supported() -> bool:
     return torch.cuda.is_available() and torch.cuda.get_device_capability() >= (10, 0)
 
 
-DTYPES = [torch.bfloat16]
+DTYPES = [torch.bfloat16, torch.float16]
 SHAPES = [(128, 64), (128, 128), (256, 64), (256, 128)]
 
 FLOAT4_E2M1_MAX = 6.0

@@ -87,6 +87,7 @@ def _jit_nvfp4_per_token_quant_module(dtype: torch.dtype) -> Module:
     with _nvfp4_arch_env():
         return load_jit(
             "nvfp4_quant",
+            args,
             cuda_files=[
                 "gemm/nvfp4/nvfp4_per_token_quant.cuh",
             ],
