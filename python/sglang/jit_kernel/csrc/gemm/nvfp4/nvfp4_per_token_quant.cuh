@@ -45,6 +45,11 @@ SGL_DEVICE uint64_t fp32_vec_to_e2m1(float2 (&array)[8]) {
       ".reg .b8 byte6;\n"
       ".reg .b8 byte7;\n"
 
+      // Temporary 32-bit registers
+      ".reg .b32 lo;\n"
+      ".reg .b32 hi;\n"
+
+      // Convert two FP32 -> one packed e2m1x2 byte
       "cvt.rn.satfinite.e2m1x2.f32 byte0, %2,  %1;\n"
       "cvt.rn.satfinite.e2m1x2.f32 byte1, %4,  %3;\n"
       "cvt.rn.satfinite.e2m1x2.f32 byte2, %6,  %5;\n"
@@ -54,9 +59,14 @@ SGL_DEVICE uint64_t fp32_vec_to_e2m1(float2 (&array)[8]) {
       "cvt.rn.satfinite.e2m1x2.f32 byte6, %14, %13;\n"
       "cvt.rn.satfinite.e2m1x2.f32 byte7, %16, %15;\n"
 
-      "mov.b64 %0, {byte0, byte1, byte2, byte3, "
-      "byte4, byte5, byte6, byte7};\n"
-      "}"
+      // Pack 4 bytes -> one uint32
+      "mov.b32 lo, {byte0, byte1, byte2, byte3};\n"
+      "mov.b32 hi, {byte4, byte5, byte6, byte7};\n"
+
+      // Pack two uint32 -> one uint64
+      "mov.b64 %0, {lo, hi};\n"
+
+      "}\n"
       : "=l"(val)
       : "f"(array[0].x),
         "f"(array[0].y),
@@ -84,6 +94,54 @@ SGL_DEVICE uint64_t fp32_vec_to_e2m1(float2 (&array)[8]) {
 #endif
 }
 
+template <typename T>
+__device__ T block_reduce_max(T val) {
+  constexpr int kWarpSize = 32;
+  __shared__ T warp_max[32];
+
+  int tid = threadIdx.x;
+  int lane = tid & (kWarpSize - 1);
+  int warp = tid / kWarpSize;
+
+  // -------------------------
+  // Step1. Warp Reduce
+  // -------------------------
+  unsigned mask = __activemask();
+
+  for (int offset = kWarpSize / 2; offset > 0; offset >>= 1) {
+    T other = __shfl_down_sync(mask, val, offset);
+    val = max(val, other);
+  }
+
+  if (lane == 0) {
+    warp_max[warp] = val;
+  }
+
+  __syncthreads();
+
+  // -------------------------
+  // Step2. First Warp Reduce
+  // -------------------------
+  int num_warps = (blockDim.x + kWarpSize - 1) / kWarpSize;
+
+  if (warp == 0) {
+    val = (lane < num_warps) ? warp_max[lane] : std::numeric_limits<T>::lowest();
+
+    unsigned warp_mask = __ballot_sync(mask, lane < num_warps);
+
+    for (int offset = kWarpSize / 2; offset > 0; offset >>= 1) {
+      T other = __shfl_down_sync(warp_mask, val, offset);
+      val = max(val, other);
+    }
+
+    if (lane == 0) {
+      warp_max[0] = val;
+    }
+  }
+  __syncthreads();
+  return warp_max[0];
+}
+
 // Quantizes the provided PackedVec into the uint32_t output
 template <typename DType, typename BlockType>
 SGL_DEVICE uint64_t nvfp4_per_token_quant_core(BlockType& block, float* SFScaleOut, uint8_t* SFout) {
@@ -102,9 +160,8 @@ SGL_DEVICE uint64_t nvfp4_per_token_quant_core(BlockType& block, float* SFScaleO
   // Get the final absolute maximum values.
   float blockMax = float(__hmax(localMax.x, localMax.y));
 
-  // auto tb = cooperative_groups::this_thread_block();
-  // float tokenMax = cooperative_groups::reduce(tb, blockMax, cooperative_groups::greater<float>());
-  float tokenMax = blockMax;
+  float tokenMax = block_reduce_max(blockMax);
+
   // Outer quant factor
   float SFScaleVal = tokenMax * E4M3MAX_MUL_E2M1MAX_RCP;
   if (threadIdx.x == 0) {
