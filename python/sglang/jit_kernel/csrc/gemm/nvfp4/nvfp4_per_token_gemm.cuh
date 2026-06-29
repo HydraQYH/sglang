@@ -15,9 +15,8 @@ limitations under the License.
 
 #pragma once
 
-#include "nvfp4_scaled_mm_common.cuh"
-
 #include "cutlass/epilogue/fusion/sm90_callbacks_tma_warpspecialized.hpp"
+#include "nvfp4_scaled_mm_common.cuh"
 
 #if defined(CUTLASS_ARCH_MMA_SM100_SUPPORTED)
 
@@ -91,24 +90,15 @@ struct PerTokenFp4GemmSm100 {
   //   D[m, n] = Acc[m, n] * row_scale[m] * col_scale[n]
   // row_scale is a logical (M, 1) vector and is broadcast across columns.
   // col_scale is a logical (1, N) vector and is broadcast across rows.
-  using RowScaleBroadcast = cutlass::epilogue::fusion::Sm90ColBroadcast<
-      0,
-      MmaTileShape,
-      ElementScale,
-      ElementAccumulator,
-      Stride<_1, _0, int64_t>,
-      1>;
-  using ColScaleBroadcast = cutlass::epilogue::fusion::Sm90RowBroadcast<
-      0,
-      MmaTileShape,
-      ElementScale,
-      ElementAccumulator,
-      Stride<_0, _1, int64_t>,
-      1>;
+  using RowScaleBroadcast = cutlass::epilogue::fusion::
+      Sm90ColBroadcast<0, MmaTileShape, ElementScale, ElementAccumulator, Stride<_1, _0, int64_t>, 1>;
+  using ColScaleBroadcast = cutlass::epilogue::fusion::
+      Sm90RowBroadcast<0, MmaTileShape, ElementScale, ElementAccumulator, Stride<_0, _1, int64_t>, 1>;
   using PerTokenScaleEpilogue = cutlass::epilogue::fusion::Sm90EVT<
       cutlass::epilogue::fusion::Sm90Compute<cutlass::multiplies, ElementD, ElementAccumulator, RoundStyle>,
       cutlass::epilogue::fusion::Sm90EVT<
-          cutlass::epilogue::fusion::Sm90Compute<cutlass::multiplies, ElementAccumulator, ElementAccumulator, RoundStyle>,
+          cutlass::epilogue::fusion::
+              Sm90Compute<cutlass::multiplies, ElementAccumulator, ElementAccumulator, RoundStyle>,
           cutlass::epilogue::fusion::Sm90AccFetch,
           RowScaleBroadcast>,
       ColScaleBroadcast>;
@@ -390,7 +380,8 @@ void nvfp4_per_token_gemm_sm100(
   if (host::is_type<fp16_t>(D.dtype())) {
     cutlassFp4PerTokenGemmDispatchSm100<cutlass::half_t>(D, A, B, A_sf, B_sf, row_scale, col_scale, m, n, k, stream);
   } else if (host::is_type<bf16_t>(D.dtype())) {
-    cutlassFp4PerTokenGemmDispatchSm100<cutlass::bfloat16_t>(D, A, B, A_sf, B_sf, row_scale, col_scale, m, n, k, stream);
+    cutlassFp4PerTokenGemmDispatchSm100<cutlass::bfloat16_t>(
+        D, A, B, A_sf, B_sf, row_scale, col_scale, m, n, k, stream);
   } else {
     Panic("Unsupported output data type of nvfp4_per_token_gemm");
   }
