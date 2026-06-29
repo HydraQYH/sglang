@@ -86,9 +86,7 @@ def dequantize_per_token_nvfp4(
 )
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("shape", SHAPES)
-def test_nvfp4_per_token_gemm(
-    dtype: torch.dtype, shape: tuple[int, int, int]
-) -> None:
+def test_nvfp4_per_token_gemm(dtype: torch.dtype, shape: tuple[int, int, int]) -> None:
     torch.manual_seed(42)
     m, n, packed_k = shape
     k = packed_k * 2

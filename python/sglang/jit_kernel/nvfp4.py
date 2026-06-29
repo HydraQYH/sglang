@@ -196,12 +196,12 @@ def nvfp4_per_token_gemm(
 ) -> torch.Tensor:
     assert a.ndim == 2 and b.ndim == 2
     m, n = a.shape[0], b.shape[0]
-    assert row_scale.shape == (m,), (
-        f"row_scale shape must be ({m},), got {row_scale.shape}."
-    )
-    assert col_scale.shape == (n,), (
-        f"col_scale shape must be ({n},), got {col_scale.shape}."
-    )
+    assert row_scale.shape == (
+        m,
+    ), f"row_scale shape must be ({m},), got {row_scale.shape}."
+    assert col_scale.shape == (
+        n,
+    ), f"col_scale shape must be ({n},), got {col_scale.shape}."
     out = torch.empty((m, n), dtype=out_dtype, device=a.device)
     module = _jit_nvfp4_per_token_gemm_module()
     module.nvfp4_per_token_gemm(
