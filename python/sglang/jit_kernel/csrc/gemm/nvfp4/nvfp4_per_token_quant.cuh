@@ -147,7 +147,8 @@ template <typename DType, typename BlockType>
 SGL_DEVICE uint64_t nvfp4_per_token_quant_core(BlockType& block, float* SFScaleOut, uint8_t* SFout) {
   constexpr float E4M3MAX = 448.0f;
   constexpr float E2M1MAX = 6.0f;
-  constexpr float E4M3MAX_MUL_E2M1MAX_RCP = 1.0f / (448.0f * 6.0f);
+  constexpr float E4M3MAX_MUL_E2M1MAX = E4M3MAX * E2M1MAX;
+  constexpr float E4M3MAX_MUL_E2M1MAX_RCP = 1.0f / E4M3MAX_MUL_E2M1MAX;
   // Get absolute maximum values among the local 8 values.
   auto localMax = __habs2(block[0]);
 
@@ -163,7 +164,7 @@ SGL_DEVICE uint64_t nvfp4_per_token_quant_core(BlockType& block, float* SFScaleO
   float tokenMax = block_reduce_max(blockMax);
 
   // Outer quant factor
-  float SFScaleVal = tokenMax * E4M3MAX_MUL_E2M1MAX_RCP;
+  float SFScaleVal = tokenMax < E4M3MAX_MUL_E2M1MAX ? 1.0f : tokenMax * E4M3MAX_MUL_E2M1MAX_RCP;
   if (threadIdx.x == 0) {
     // STG.32
     *SFScaleOut = SFScaleVal;
