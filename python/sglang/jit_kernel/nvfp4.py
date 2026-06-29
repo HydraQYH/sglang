@@ -138,6 +138,20 @@ def _jit_nvfp4_scaled_mm_module() -> Module:
 
 
 @cache_once
+def _jit_nvfp4_per_token_gemm_module() -> Module:
+    with _nvfp4_arch_env():
+        return load_jit(
+            "nvfp4_per_token_gemm",
+            cuda_files=[
+                "gemm/nvfp4/nvfp4_per_token_gemm.cuh",
+            ],
+            cuda_wrappers=[("nvfp4_per_token_gemm", "nvfp4_per_token_gemm")],
+            extra_dependencies=["cutlass"],
+            extra_cuda_cflags=_nvfp4_cuda_flags(),
+        )
+
+
+@cache_once
 def _jit_nvfp4_blockwise_moe_module() -> Module:
     with _nvfp4_arch_env():
         return load_jit(
@@ -167,6 +181,32 @@ def cutlass_scaled_fp4_mm(
     out = torch.empty((m, n), dtype=out_dtype, device=a.device)
     module = _jit_nvfp4_scaled_mm_module()
     module.cutlass_scaled_fp4_mm(out, a, b, block_scale_a, block_scale_b, alpha)
+    return out
+
+
+@debug_kernel_api
+def nvfp4_per_token_gemm(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    block_scale_a: torch.Tensor,
+    block_scale_b: torch.Tensor,
+    row_scale: torch.Tensor,
+    col_scale: torch.Tensor,
+    out_dtype: torch.dtype,
+) -> torch.Tensor:
+    assert a.ndim == 2 and b.ndim == 2
+    m, n = a.shape[0], b.shape[0]
+    assert row_scale.shape == (m,), (
+        f"row_scale shape must be ({m},), got {row_scale.shape}."
+    )
+    assert col_scale.shape == (n,), (
+        f"col_scale shape must be ({n},), got {col_scale.shape}."
+    )
+    out = torch.empty((m, n), dtype=out_dtype, device=a.device)
+    module = _jit_nvfp4_per_token_gemm_module()
+    module.nvfp4_per_token_gemm(
+        out, a, b, block_scale_a, block_scale_b, row_scale, col_scale
+    )
     return out
 
 
