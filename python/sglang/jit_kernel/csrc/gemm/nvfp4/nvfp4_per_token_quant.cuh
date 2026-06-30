@@ -147,6 +147,8 @@ template <typename DType, typename BlockType>
 SGL_DEVICE uint64_t nvfp4_per_token_quant_core(BlockType& block, float* SFScaleOut, uint8_t* SFout) {
   constexpr float E4M3MAX = 448.0f;
   constexpr float E2M1MAX = 6.0f;
+  constexpr float E4M3MAX_RCP = 1.0f / E4M3MAX;
+  constexpr float E2M1MAX_RCP = 1.0f / E2M1MAX;
   constexpr float E4M3MAX_MUL_E2M1MAX = E4M3MAX * E2M1MAX;
   constexpr float E4M3MAX_MUL_E2M1MAX_RCP = 1.0f / E4M3MAX_MUL_E2M1MAX;
   // Get absolute maximum values among the local 8 values.
@@ -164,14 +166,18 @@ SGL_DEVICE uint64_t nvfp4_per_token_quant_core(BlockType& block, float* SFScaleO
   float tokenMax = block_reduce_max(blockMax);
 
   // Outer quant factor
-  float SFScaleVal = tokenMax < E4M3MAX_MUL_E2M1MAX ? 1.0f : tokenMax * E4M3MAX_MUL_E2M1MAX_RCP;
+  bool discard_global_scale = tokenMax < E4M3MAX_MUL_E2M1MAX;
+  float SFScaleVal = discard_global_scale ? 1.0f : tokenMax * E4M3MAX_MUL_E2M1MAX_RCP;
+  // constexpr bool discard_global_scale = false;
+  // float SFScaleVal = tokenMax * E4M3MAX_MUL_E2M1MAX_RCP;
   if (threadIdx.x == 0) {
     // STG.32
     *SFScaleOut = SFScaleVal;
   }
 
   // Get the SF (max value of the vector / max value of e2m1).
-  float SFValue = E4M3MAX * blockMax * reciprocal_approximate_ftz(tokenMax);
+  float SFValue =
+      discard_global_scale ? blockMax * E2M1MAX_RCP : E4M3MAX * blockMax * reciprocal_approximate_ftz(tokenMax);
   // 8 bits representation of the SF.
   uint8_t fp8SFVal;
   // Write the SF to global memory (STG.8).
@@ -183,7 +189,9 @@ SGL_DEVICE uint64_t nvfp4_per_token_quant_core(BlockType& block, float* SFScaleO
   // Recipe: final_scale = reciprocal(fp32(fp8(SFValue * SFScaleVal))) *
   //                       reciprocal(SFScaleVal))
   // float outputScale = SFValue != 0 ? (E2M1MAX * reciprocal_approximate_ftz(blockMax)) : 0.0f;
-  float outputScale = SFValue != 0 ? reciprocal_approximate_ftz(SFValue * SFScaleVal) : 0.0f;
+  float outputScale = SFValue != 0 ? (discard_global_scale ? reciprocal_approximate_ftz(SFValue)
+                                                           : reciprocal_approximate_ftz(SFValue * SFScaleVal))
+                                   : 0.0f;
 
   // Write the SF to global memory (STG.8).
   *SFout = fp8SFVal;
